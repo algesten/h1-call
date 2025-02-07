@@ -51,6 +51,7 @@ use self::state::*;
 ///
 pub struct Call<State, B> {
     request: AmendedRequest<B>,
+    phase: Phase,
     analyzed: bool,
     state: BodyState,
     _ph: PhantomData<State>,
@@ -94,6 +95,7 @@ impl<State, B> Call<State, B> {
 
         Ok(Call {
             request,
+            phase: Phase::SendLine,
             analyzed: false,
             state: BodyState {
                 writer: default_body_mode,
@@ -151,11 +153,9 @@ impl<State, B> Call<State, B> {
 
         Ok(Call {
             request: self.request,
+            phase: Phase::RecvResponse,
             analyzed: self.analyzed,
-            state: BodyState {
-                phase: Phase::RecvResponse,
-                ..self.state
-            },
+            state: BodyState { ..self.state },
             _ph: PhantomData,
         })
     }
@@ -178,7 +178,6 @@ impl<State, B> Call<State, B> {
 
 #[derive(Debug, Default)]
 pub(crate) struct BodyState {
-    phase: Phase,
     writer: BodyWriter,
     reader: Option<BodyReader>,
     skip_method_body_check: bool,
@@ -203,12 +202,6 @@ enum Phase {
     RecvBody,
 }
 
-impl Default for Phase {
-    fn default() -> Self {
-        Self::SendLine
-    }
-}
-
 impl Phase {
     fn is_prelude(&self) -> bool {
         matches!(self, Phase::SendLine | Phase::SendHeaders(_))
@@ -227,6 +220,7 @@ impl<B> Call<WithoutBody, B> {
 
         Call {
             request: self.request,
+            phase: self.phase,
             analyzed: self.analyzed,
             state: self.state,
             _ph: PhantomData,
@@ -253,7 +247,7 @@ impl<B> Call<WithoutBody, B> {
         self.analyze_request()?;
 
         let mut w = Writer::new(output);
-        try_write_prelude(&self.request, &mut self.state, &mut w)?;
+        try_write_prelude(&self.request, &mut self.phase, &mut w)?;
 
         let output_used = w.len();
 
@@ -262,7 +256,7 @@ impl<B> Call<WithoutBody, B> {
 
     /// Whether the request has been fully written.
     pub fn is_finished(&self) -> bool {
-        !self.state.phase.is_prelude()
+        !self.phase.is_prelude()
     }
 
     /// Proceed to receiving a response
@@ -322,7 +316,7 @@ impl<B> Call<WithBody, B> {
         let mut input_used = 0;
 
         if self.is_prelude() {
-            try_write_prelude(&self.request, &mut self.state, &mut w)?;
+            try_write_prelude(&self.request, &mut self.phase, &mut w)?;
         } else if self.is_body() {
             if !input.is_empty() && self.state.writer.is_ended() {
                 return Err(Error::BodyContentAfterFinish);
@@ -355,11 +349,11 @@ impl<B> Call<WithBody, B> {
     }
 
     pub(crate) fn is_prelude(&self) -> bool {
-        self.state.phase.is_prelude()
+        self.phase.is_prelude()
     }
 
     pub(crate) fn is_body(&self) -> bool {
-        self.state.phase.is_body()
+        self.phase.is_body()
     }
 
     pub(crate) fn is_chunked(&self) -> bool {
@@ -382,19 +376,19 @@ impl<B> Call<WithBody, B> {
 
 fn try_write_prelude<B>(
     request: &AmendedRequest<B>,
-    state: &mut BodyState,
+    phase: &mut Phase,
     w: &mut Writer,
 ) -> Result<(), Error> {
     let at_start = w.len();
 
     loop {
-        if try_write_prelude_part(request, state, w) {
+        if try_write_prelude_part(request, phase, w) {
             continue;
         }
 
         let written = w.len() - at_start;
 
-        if written > 0 || state.phase.is_body() {
+        if written > 0 || phase.is_body() {
             return Ok(());
         } else {
             return Err(Error::OutputOverflow);
@@ -404,14 +398,14 @@ fn try_write_prelude<B>(
 
 fn try_write_prelude_part<Body>(
     request: &AmendedRequest<Body>,
-    state: &mut BodyState,
+    phase: &mut Phase,
     w: &mut Writer,
 ) -> bool {
-    match &mut state.phase {
+    match phase {
         Phase::SendLine => {
             let success = do_write_send_line(request.prelude(), w);
             if success {
-                state.phase = Phase::SendHeaders(0);
+                *phase = Phase::SendHeaders(0);
             }
             success
         }
@@ -424,7 +418,7 @@ fn try_write_prelude_part<Body>(
             do_write_headers(skipped, index, header_count - 1, w);
 
             if *index == header_count {
-                state.phase = Phase::SendBody;
+                *phase = Phase::SendBody;
             }
             false
         }
@@ -575,11 +569,9 @@ impl<B> Call<RecvResponse, B> {
     pub(crate) fn do_into_body(self) -> Call<RecvBody, B> {
         Call {
             request: self.request,
+            phase: Phase::RecvBody,
             analyzed: self.analyzed,
-            state: BodyState {
-                phase: Phase::RecvBody,
-                ..self.state
-            },
+            state: BodyState { ..self.state },
             _ph: PhantomData,
         }
     }
@@ -642,9 +634,7 @@ impl<B> Call<RecvBody, B> {
 
 impl<State, B> fmt::Debug for Call<State, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Call")
-            .field("phase", &self.state.phase)
-            .finish()
+        f.debug_struct("Call").field("phase", &self.phase).finish()
     }
 }
 

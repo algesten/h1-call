@@ -29,6 +29,9 @@ pub use body::BodyMode;
 
 pub mod client;
 
+mod close_reason;
+pub use close_reason::CloseReason;
+
 /// Low level HTTP parser
 ///
 /// This is to bridge `httparse` crate to `http` crate.

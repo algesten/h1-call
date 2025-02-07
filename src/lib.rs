@@ -28,6 +28,7 @@ mod body;
 pub use body::BodyMode;
 
 pub mod client;
+pub mod server;
 
 mod close_reason;
 pub use close_reason::CloseReason;

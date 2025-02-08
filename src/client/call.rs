@@ -16,22 +16,17 @@ use crate::{BodyMode, Error};
 use super::amended::AmendedRequest;
 use super::MAX_RESPONSE_HEADERS;
 
-#[doc(hidden)]
 pub mod state {
     /// Type state for requests without bodies via [`Call::without_body()`]
-    #[doc(hidden)]
     pub struct WithoutBody(());
 
     /// Type state for streaming bodies via [`Call::with_streaming_body()`]
-    #[doc(hidden)]
     pub struct WithBody(());
 
     /// Type state for receiving the HTTP Response
-    #[doc(hidden)]
     pub struct RecvResponse(());
 
     /// Type state for receiving the response body
-    #[doc(hidden)]
     pub struct RecvBody(());
 }
 use self::state::*;

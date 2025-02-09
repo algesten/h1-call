@@ -1,7 +1,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use http::{header, Method, Request};
+use http::{header, Method, Request, Response};
 
 use crate::ext::{HeaderIterExt, MethodExt};
 use crate::{ArrayVec, CloseReason, Error};
@@ -159,8 +159,6 @@ impl Flow<RecvRequest> {
     }
 }
 
-impl Flow<Send100> {}
-
 /// The possible states after receiving a request.
 ///
 /// See [state graph][crate::server]
@@ -172,6 +170,59 @@ pub enum RecvRequestResult {
     /// Client did not send a body.
     SendResponse(Flow<SendResponse>),
 }
+
+// //////////////////////////////////////////////////////////////////////////////////////////// SEND 100
+
+impl Flow<Send100> {
+    /// Sends a 100 Continue response.
+    ///
+    /// This proceeds to receiving the body.
+    ///
+    /// Panics if output isn't large enough to contain the 100 Continue status line.
+    pub fn accept(mut self, output: &mut [u8]) -> Result<(usize, Flow<RecvBody>), Error> {
+        let output_used = self.call_mut().as_send_100_mut().send_100(output)?;
+
+        if output_used == 0 {
+            panic!("Not enough output to write 100-Continue");
+        }
+
+        let call_body = match self.inner.call {
+            CallHolder::Send100(v) => v,
+            _ => unreachable!(),
+        };
+
+        self.inner.call = CallHolder::RecvBody(call_body.into_recv_body());
+        let flow = Flow::wrap(self.inner);
+
+        Ok((output_used, flow))
+    }
+
+    pub fn reject<B>(self, response: Response<B>) -> Result<Flow<SendResponse, B>, Error> {
+        if !response.status().is_client_error() && !response.status().is_server_error() {
+            return Err(Error::BadReject100Status(response.status()));
+        }
+
+        let call_body = match self.inner.call {
+            CallHolder::Send100(v) => v,
+            _ => unreachable!(),
+        };
+
+        let call_body = call_body.reject(response)?;
+
+        let inner = Inner {
+            call: CallHolder::WithBody(call_body),
+            close_reason: self.inner.close_reason,
+            method: self.inner.method,
+            expect_100: self.inner.expect_100,
+        };
+
+        Ok(Flow::wrap(inner))
+    }
+}
+
+// //////////////////////////////////////////////////////////////////////////////////////////// RECV BODY
+
+impl Flow<RecvBody> {}
 
 // ////////////////////////////////////////////////////////////////////////////////////////////
 

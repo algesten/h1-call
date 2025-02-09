@@ -138,6 +138,30 @@ impl Call<RecvRequest> {
     }
 }
 
+impl Call<Send100> {
+    pub fn send_100(&mut self, output: &mut [u8]) -> Result<usize, Error> {
+        let mut w = Writer::new(output);
+
+        do_write_send_line((Version::HTTP_11, StatusCode::CONTINUE), &mut w, true);
+
+        let output_used = w.len();
+
+        Ok(output_used)
+    }
+
+    pub fn into_recv_body(self) -> Call<RecvBody> {
+        Call {
+            phase: Phase::RecvBody,
+            state: self.state,
+            ..Default::default()
+        }
+    }
+
+    pub fn reject<B>(self, response: Response<B>) -> Result<Call<WithBody, B>, Error> {
+        append_request(self, response, BodyWriter::new_chunked())
+    }
+}
+
 impl Call<RecvBody> {
     /// Read the input as a request body
     ///
@@ -320,14 +344,14 @@ impl<B> Call<WithBody, B> {
 }
 
 fn try_write_prelude<B>(
-    request: &AmendedResponse<B>,
+    response: &AmendedResponse<B>,
     phase: &mut Phase,
     w: &mut Writer,
 ) -> Result<(), Error> {
     let at_start = w.len();
 
     loop {
-        if try_write_prelude_part(request, phase, w) {
+        if try_write_prelude_part(response, phase, w) {
             continue;
         }
 
@@ -342,13 +366,13 @@ fn try_write_prelude<B>(
 }
 
 fn try_write_prelude_part<Body>(
-    request: &AmendedResponse<Body>,
+    response: &AmendedResponse<Body>,
     phase: &mut Phase,
     w: &mut Writer,
 ) -> bool {
     match phase {
         Phase::SendStatus => {
-            let success = do_write_send_line(request.prelude(), w);
+            let success = do_write_send_line(response.prelude(), w, false);
             if success {
                 *phase = Phase::SendHeaders(0);
             }
@@ -356,8 +380,8 @@ fn try_write_prelude_part<Body>(
         }
 
         Phase::SendHeaders(index) => {
-            let header_count = request.headers_len();
-            let all = request.headers();
+            let header_count = response.headers_len();
+            let all = response.headers();
             let skipped = all.skip(*index);
 
             do_write_headers(skipped, index, header_count - 1, w);
@@ -373,14 +397,15 @@ fn try_write_prelude_part<Body>(
     }
 }
 
-fn do_write_send_line(line: (Version, StatusCode), w: &mut Writer) -> bool {
+fn do_write_send_line(line: (Version, StatusCode), w: &mut Writer, end_head: bool) -> bool {
     w.try_write(|w| {
         write!(
             w,
-            "{:?} {} {}\r\n",
+            "{:?} {} {}\r\n{}",
             line.0,
             line.1.as_str(),
-            line.1.canonical_reason().unwrap_or("Unknown")
+            line.1.canonical_reason().unwrap_or("Unknown"),
+            if end_head { "\r\n" } else { "" }
         )
     })
 }
